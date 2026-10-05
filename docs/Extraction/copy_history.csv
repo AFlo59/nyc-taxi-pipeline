@@ -1,0 +1,4 @@
+FILE_NAME,STATUS,ROW_COUNT,LAST_LOAD_TIME
+yellow_tripdata_2025-01.parquet,Loaded,3475226,2026-10-05 05:18:25.556 -0700
+yellow_tripdata_2025-02.parquet,Loaded,3577543,2026-10-05 06:31:51.131 -0700
+yellow_tripdata_2025-03.parquet,Loaded,4145257,2026-10-05 06:32:36.262 -0700
