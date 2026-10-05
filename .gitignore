@@ -20,3 +20,4 @@ airflow_settings.yaml
 *.parquet
 taxi_zone_lookup.csv
 .DS_Store
+snowflake/build/
