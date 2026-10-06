@@ -1,4 +1,4 @@
-"""Pipeline mensuel NYC Yellow Taxi : chargement de la couche RAW.
+"""Pipeline mensuel NYC Yellow Taxi : RAW → STAGING → INTERMEDIATE → MARTS.
 
 Une exécution traite un mois : celui de sa date logique (logical_date), jamais
 celui de la date du jour. Avec catchup=True, Airflow crée une exécution par mois
@@ -7,14 +7,28 @@ entre PREMIER_MOIS et DERNIER_MOIS.
     vérifier que le fichier du mois est publié
       → le télécharger et le déposer sur le stage (PUT)
       → le copier dans la table RAW (COPY INTO)
+      → contrôle : le mois est dans RAW
+      → 00_tables + staging (2 vues, tables de codes)
+      → intermediate : trajets étiquetés → contrôle des écartés → trajets enrichis
+      → marts : dimensions, table de faits → contrôle des doublons → tables d'analyse
+
+Transformations : une tâche par fichier SQL fourni (include/sql/, non modifiés),
+task_id = nom du fichier. Airflow remplace {{ ds }}, {{ logical_date... }} et
+{{ params.xxx }} dans chaque fichier avant de l'exécuter.
+
+Contrôles : une requête qui renvoie une ligne ; si une valeur est fausse, la
+tâche échoue et les tâches qui en dépendent ne s'exécutent pas. Pas de relance
+automatique (retries=0) : relancer ne change pas les données.
 
 Configuration : les noms (connexion, source, stage, table) sont des params du
 DAG, rendus par Jinja ({{ params.xxx }}) au moment de l'exécution. Pour réutiliser
 ce DAG sur un autre projet, seul le bloc CONFIGURATION ci-dessous change.
 
 Rejouable : relancer un mois n'ajoute aucune ligne. PUT ... OVERWRITE=FALSE
-n'envoie pas de nouveau un fichier déjà présent, et COPY INTO ignore un fichier
-déjà chargé dans la table (mémoire de 64 jours côté Snowflake).
+n'envoie pas de nouveau un fichier déjà présent, COPY INTO ignore un fichier
+déjà chargé dans la table (mémoire de 64 jours côté Snowflake), et les fichiers
+SQL effacent le mois avant de le réinsérer (DELETE puis INSERT) ou recréent
+leur table (CREATE OR REPLACE).
 
 Connexion : son contenu (compte, clé privée, rôle) est dans airflow/.env, ignoré
 par Git et par Docker : aucune clé dans le code ni dans l'image.
@@ -27,8 +41,9 @@ from pathlib import Path
 
 import pendulum
 import requests
+from airflow.providers.common.sql.operators.sql import SQLCheckOperator, SQLExecuteQueryOperator
 from airflow.providers.snowflake.hooks.snowflake import SnowflakeHook
-from airflow.sdk import Param, dag, task
+from airflow.sdk import Param, TaskGroup, dag, task
 
 # =============================================================================
 # CONFIGURATION DU PROJET : seul bloc à modifier pour un autre projet
@@ -37,6 +52,9 @@ from airflow.sdk import Param, dag, task
 # Période rejouée : une exécution par mois, du premier au dernier inclus
 PREMIER_MOIS = pendulum.datetime(2025, 1, 1, tz="UTC")
 DERNIER_MOIS = pendulum.datetime(2025, 3, 1, tz="UTC")
+
+# Dossier des fichiers SQL dans le conteneur (airflow/include/ du projet Astro)
+DOSSIER_SQL = "/usr/local/airflow/include/sql"
 
 # Valeurs accessibles en Jinja par {{ params.<nom> }}, dans ce DAG comme dans
 # les fichiers SQL. Visibles dans l'interface, onglet Détails du DAG.
@@ -86,6 +104,11 @@ PARAMS = {
         DERNIER_MOIS.add(months=1).to_date_string(), type="string",
         description="Mois qui suit le dernier mois du calendrier, exclu (dim_date.sql)",
     ),
+    # Seuil du contrôle controles/trajets_ecartes.sql
+    "max_pct_trajets_ecartes": Param(
+        10, type="number", minimum=0, maximum=100,
+        description="Part maximale de trajets écartés dans un mois, en % (au-delà : échec)",
+    ),
 }
 
 # =============================================================================
@@ -96,21 +119,42 @@ FICHIER = "{{ params.prefixe_fichier }}_" + MOIS + ".{{ params.extension }}"
 URL = "{{ params.url_base }}/" + FICHIER
 
 
+def executer_sql(fichier: str) -> SQLExecuteQueryOperator:
+    """Une tâche qui exécute un fichier SQL fourni ; task_id = nom du fichier."""
+    return SQLExecuteQueryOperator(
+        task_id=Path(fichier).stem,
+        conn_id="{{ params.conn_id }}",
+        sql=fichier,  # chemin relatif à DOSSIER_SQL (template_searchpath)
+        split_statements=True,  # DELETE puis INSERT, ou plusieurs CREATE
+    )
+
+
+def controler(fichier: str) -> SQLCheckOperator:
+    """Une tâche de contrôle : échoue si une valeur de la ligne renvoyée est fausse."""
+    return SQLCheckOperator(
+        task_id=f"controle_{Path(fichier).stem}",
+        conn_id="{{ params.conn_id }}",
+        sql=fichier,
+        retries=0,  # relancer ne change pas les données : échouer tout de suite
+    )
+
+
 @dag(
     dag_id="nyc_taxi_pipeline",
-    description="Chargement mensuel des trajets TLC dans la couche RAW",
+    description="Chargement mensuel des trajets TLC, transformations et contrôles",
     schedule="@monthly",
     start_date=PREMIER_MOIS,
     end_date=DERNIER_MOIS,
     catchup=True,  # False par défaut en Airflow 3 : indispensable pour rejouer l'historique
     max_active_runs=1,  # un mois à la fois, dans l'ordre
     params=PARAMS,
+    template_searchpath=DOSSIER_SQL,
     default_args={
         # Coupure réseau, fichier pas encore publié, Snowflake indisponible
         "retries": 2,
         "retry_delay": pendulum.duration(minutes=5),
     },
-    tags=["nyc_taxi", "raw"],
+    tags=["nyc_taxi", "raw", "staging", "intermediate", "marts"],
 )
 def nyc_taxi_pipeline():
     @task
@@ -187,13 +231,50 @@ def nyc_taxi_pipeline():
     # Les arguments en {{ ... }} sont rendus par Airflow avant l'exécution de la tâche
     url = verifier_disponibilite(url=URL)
     fichier = telecharger_et_deposer(url=url, conn_id="{{ params.conn_id }}", stage="{{ params.stage }}")
-    copier_dans_la_table(
+    copie = copier_dans_la_table(
         fichier=fichier,
         conn_id="{{ params.conn_id }}",
         stage="{{ params.stage }}",
         format_fichier="{{ params.format_fichier }}",
         table="{{ params.table_brute }}",
     )
+
+    # ------------------------------------------------------------------
+    # Transformations et contrôles. Ordre déduit des fichiers : chacun
+    # s'exécute après ceux qui créent les tables qu'il lit.
+    # ------------------------------------------------------------------
+    raw_mois_charge = controler("controles/raw_mois_charge.sql")  # contrôle fourni
+    tables = executer_sql("00_tables.sql")  # tables alimentées mois par mois
+
+    with TaskGroup("staging") as staging:
+        executer_sql("staging/codes_tlc.sql")  # tables de codes (paiement, tarif, fournisseur)
+        executer_sql("staging/stg_tlc__taxi_zones.sql")  # vue sur RAW.TAXI_ZONE_LOOKUP
+        executer_sql("staging/stg_tlc__yellow_trips.sql")  # vue sur RAW.YELLOW_TRIPDATA
+
+    with TaskGroup("intermediate") as intermediate:
+        flagged = executer_sql("intermediate/int_trips__flagged.sql")  # STG → raison de rejet
+        ecartes = controler("controles/trajets_ecartes.sql")
+        enriched = executer_sql("intermediate/int_trips__enriched.sql")  # valides, dédoublonnés
+        flagged >> ecartes >> enriched
+
+    with TaskGroup("marts") as marts:
+        dim_date = executer_sql("marts/dim_date.sql")
+        dim_payment_type = executer_sql("marts/dim_payment_type.sql")
+        executer_sql("marts/dim_rate_code.sql")
+        executer_sql("marts/dim_vendor.sql")
+        dim_zone = executer_sql("marts/dim_zone.sql")
+        fct_trips = executer_sql("marts/fct_trips.sql")
+        doublons = controler("controles/trajets_en_double.sql")
+        mart_daily_revenue = executer_sql("marts/mart_daily_revenue.sql")
+        mart_zone_hourly_demand = executer_sql("marts/mart_zone_hourly_demand.sql")
+        executer_sql("marts/mart_data_quality.sql")  # lit INT_TRIPS__FLAGGED
+
+        fct_trips >> doublons
+        [doublons, dim_date, dim_payment_type] >> mart_daily_revenue
+        [doublons, dim_zone] >> mart_zone_hourly_demand
+
+    copie >> raw_mois_charge >> [tables, staging]
+    [tables, staging] >> intermediate >> marts
 
 
 nyc_taxi_pipeline()
