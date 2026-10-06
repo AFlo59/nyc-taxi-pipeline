@@ -49,28 +49,26 @@ LIMIT 10;
 
 ## Le résultat : les 10 premiers créneaux zone × heure
 
+Heure de prise en charge, heure locale de New York : « 18 h » = de 18 h 00 à 18 h 59. Classement par nombre de trajets, du 1er janvier au 31 mars 2025 (90 jours).
+
 | Rang | Zone | Arrondissement | Heure | Trajets | Trajets par jour | Revenu moyen ($) | Carte ($) | Espèces ($) | % carte |
 |---|---|---|---|---|---|---|---|---|---|
-| 1 | | | | | | | | | |
-| 2 | | | | | | | | | |
-| 3 | | | | | | | | | |
-| 4 | | | | | | | | | |
-| 5 | | | | | | | | | |
-| 6 | | | | | | | | | |
-| 7 | | | | | | | | | |
-| 8 | | | | | | | | | |
-| 9 | | | | | | | | | |
-| 10 | | | | | | | | | |
-
-> À remplir avec le résultat de la requête dans Snowsight, en recopiant les valeurs ou en téléchargeant le résultat.
+| 1 | Midtown Center | Manhattan | 18 h | 45 978 | 510,9 | 24,40 | 25,06 | 19,93 | 83,2 |
+| 2 | Midtown Center | Manhattan | 17 h | 45 063 | 500,7 | 28,57 | 26,35 | 20,74 | 84,4 |
+| 3 | Midtown Center | Manhattan | 19 h | 38 770 | 430,8 | 23,62 | 24,25 | 19,36 | 81,7 |
+| 4 | Midtown Center | Manhattan | 20 h | 38 518 | 428,0 | 22,67 | 23,61 | 18,61 | 72,3 |
+| 5 | Midtown Center | Manhattan | 16 h | 36 702 | 407,8 | 25,77 | 26,53 | 21,27 | 83,6 |
+| 6 | Upper East Side North | Manhattan | 15 h | 36 598 | 406,6 | 20,37 | 20,64 | 17,12 | 81,3 |
+| 7 | Upper East Side South | Manhattan | 14 h | 36 482 | 405,4 | 19,98 | 20,41 | 16,85 | 81,8 |
+| 8 | Upper East Side South | Manhattan | 15 h | 36 399 | 404,4 | 19,98 | 20,34 | 16,94 | 82,4 |
+| 9 | Times Sq/Theatre District | Manhattan | 21 h | 36 340 | 403,8 | 23,58 | 24,50 | 18,94 | 71,2 |
+| 10 | Upper East Side South | Manhattan | 18 h | 36 093 | 401,0 | 21,23 | 21,54 | 17,97 | 81,9 |
 
 ## Ce qu'il faut en retenir
 
-Trois phrases, pour quelqu'un qui ne lit pas le SQL :
-
-1. **Où et quand** : …
-2. **Combien rapporte un trajet** : …
-3. **Mode de paiement** : …
+1. **Où et quand** : la demande se concentre à Manhattan, où se trouvent les dix créneaux les plus chargés. Midtown Center en occupe cinq, de 16 h à 21 h, avec un pic à 18 h : 511 courses par jour en moyenne. L'Upper East Side domine l'après-midi (14 h à 16 h), et Times Square le soir à 21 h.
+2. **Combien rapporte un trajet** : dans ces créneaux, une course rapporte en moyenne de 20 à 29 $. Les plus rentables partent de Midtown Center en fin d'après-midi (28,57 $ à 17 h), les moins rentables de l'Upper East Side (environ 20 $).
+3. **Mode de paiement** : 71 à 84 % des courses sont payées par carte, moins le soir (72 % à 20 h, 71 % à 21 h). Une course payée par carte rapporte 3,40 à 5,60 $ de plus qu'en espèces (20 à 27 $ contre 17 à 21 $), mais une partie de cet écart vient des pourboires, enregistrés seulement pour la carte.
 
 ## Les limites
 
