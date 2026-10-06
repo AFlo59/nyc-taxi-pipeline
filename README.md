@@ -225,4 +225,3 @@ Crédits consommés pendant le projet : _à compléter_ (`03_verifications.sql`,
 ## Auteurs
 
 - Florian
-- _binôme_
